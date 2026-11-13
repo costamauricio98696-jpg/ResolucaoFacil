@@ -1,0 +1,263 @@
+
+package com.resfacil
+
+import android.content.pm.PackageManager
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.*
+import rikka.shizuku.Shizuku
+
+private val Red = Color(0xFFFF1744)
+
+private fun shell(vararg args: String): String {
+    val method = Shizuku::class.java.getDeclaredMethod(
+        "newProcess",
+        Array<String>::class.java,
+        Array<String>::class.java,
+        String::class.java
+    ).apply { isAccessible = true }
+
+    val process = method.invoke(null, args, null, null) as Process
+    val output = process.inputStream.bufferedReader().readText()
+    val error = process.errorStream.bufferedReader().readText()
+    process.waitFor()
+    return (output + "\n" + error).trim()
+}
+
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: android.os.Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent { App() }
+    }
+}
+
+@Composable
+fun App() {
+    val scope = rememberCoroutineScope()
+
+    var status by remember { mutableStateOf("Verifique o Shizuku") }
+    var result by remember { mutableStateOf("Pronto") }
+    var resolution by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+    var seconds by remember { mutableIntStateOf(0) }
+    var busy by remember { mutableStateOf(false) }
+
+    val games = listOf(
+        "Free Fire MAX" to "com.dts.freefiremax",
+        "Roblox" to "com.roblox.client"
+    )
+
+    var selected by remember { mutableStateOf(games[0]) }
+
+    fun check() {
+        status = when {
+            !Shizuku.pingBinder() ->
+                "Shizuku não está ativo"
+            Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED ->
+                "Permissão necessária"
+            else -> "Shizuku conectado"
+        }
+    }
+
+    fun execute(vararg args: String, done: (String) -> Unit = {}) {
+        if (!Shizuku.pingBinder() ||
+            Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED
+        ) {
+            check()
+            result = "Autorize o Shizuku primeiro"
+            return
+        }
+
+        busy = true
+
+        scope.launch {
+            val response = withContext(Dispatchers.IO) {
+                runCatching { shell(*args) }
+                    .getOrElse { "Erro: ${it.message}" }
+            }
+
+            result = response
+            busy = false
+            done(response)
+        }
+    }
+
+    fun readResolution() {
+        execute("wm", "size") { output ->
+            val match = Regex(
+                """Physical size: (\d+)x(\d+)"""
+            ).find(output)
+
+            if (match != null) {
+                resolution =
+                    match.groupValues[1].toInt() to
+                    match.groupValues[2].toInt()
+            }
+        }
+    }
+
+    fun testResolution(percent: Int) {
+        val size = resolution ?: return
+
+        execute(
+            "wm", "size",
+            "${size.first * percent / 100}x${size.second * percent / 100}"
+        ) {
+            seconds = 15
+        }
+    }
+
+    LaunchedEffect(Unit) { check() }
+
+    LaunchedEffect(seconds) {
+        if (seconds > 0) {
+            delay(1000)
+            seconds--
+
+            if (seconds == 0) {
+                execute("wm", "size", "reset")
+                result = "Resolução restaurada"
+            }
+        }
+    }
+
+    MaterialTheme(
+        colorScheme = darkColorScheme(primary = Red)
+    ) {
+        Column(
+            Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(
+                "RESOLUÇÃO FÁCIL 2.0",
+                color = Red,
+                fontSize = 25.sp
+            )
+
+            Text(status, color = Color.White)
+
+            Button(onClick = { check() }) {
+                Text("Verificar Shizuku")
+            }
+
+            Button(
+                onClick = {
+                    if (Shizuku.pingBinder()) {
+                        Shizuku.requestPermission(1)
+                    }
+                }
+            ) {
+                Text("Autorizar")
+            }
+
+            HorizontalDivider()
+
+            Text("DESEMPENHO", color = Red, fontSize = 20.sp)
+
+            games.forEach { game ->
+                OutlinedButton(
+                    onClick = { selected = game },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        if (selected == game)
+                            "✓ ${game.first}"
+                        else game.first
+                    )
+                }
+            }
+
+            Button(
+                onClick = {
+                    execute(
+                        "cmd", "game", "mode",
+                        "performance", selected.second
+                    )
+                },
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("ATIVAR DESEMPENHO")
+            }
+
+            OutlinedButton(
+                onClick = {
+                    execute(
+                        "cmd", "game", "mode",
+                        "standard", selected.second
+                    )
+                },
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("PERFIL PADRÃO")
+            }
+
+            HorizontalDivider()
+
+            Text("RESOLUÇÃO", color = Red, fontSize = 20.sp)
+
+            Button(onClick = { readResolution() }) {
+                Text("Ler resolução original")
+            }
+
+            resolution?.let { (w, h) ->
+                Text("Original: ${w}x${h}")
+
+                listOf(90, 80, 70).forEach { percent ->
+                    OutlinedButton(
+                        onClick = { testResolution(percent) },
+                        enabled = seconds == 0 && !busy,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Testar $percent%")
+                    }
+                }
+            }
+
+            if (seconds > 0) {
+                Button(
+                    onClick = {
+                        seconds = 0
+                        result = "Resolução mantida"
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("MANTER ($seconds segundos)")
+                }
+            }
+
+            Button(
+                onClick = {
+                    seconds = 0
+                    execute("wm", "size", "reset")
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("RESTAURAR RESOLUÇÃO")
+            }
+
+            HorizontalDivider()
+
+            Text("Resultado: $result", color = Color.Gray)
+
+            Text(
+                "Não realiza overclock nem desativa proteções térmicas. " +
+                "O desempenho depende do suporte do Android e do hardware.",
+                color = Color.Gray,
+                fontSize = 12.sp
+            )
+        }
+    }
+}
